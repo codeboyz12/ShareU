@@ -5,26 +5,28 @@ import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Properties;
+
+// Imports for JavaMail (ต้องมี JAR Files ถึงจะ Compile ผ่าน)
+import javax.mail.*;
+import javax.mail.internet.*;
 
 // ==========================================
-// 1. ENUMS & CONSTANTS (กำหนดค่าคงที่)
+// 1. ENUMS & CONSTANTS
 // ==========================================
 enum UserRole { STUDENT, ADMIN }
-enum ItemStatus { AVAILABLE, BORROWED, MAINTENANCE }
-enum RequestType { NEW_BORROW, RENEW }
+enum RequestType { NEW_BORROW, RENEW, EXTEND } 
 enum RequestStatus { PENDING, APPROVED, REJECTED, COMPLETED }
 enum CardType { STUDENT_CARD, NATIONAL_ID }
 
 // ==========================================
-// 2. MODEL LAYER (Data Structure & OOP)
+// 2. MODEL LAYER
 // ==========================================
 
-// Abstract Class: User (Reusable base for Student/Admin) 
 abstract class User {
-    protected String id; // Username/CardID
+    protected String id; 
     protected String name;
-    protected String email;
+    protected String email; 
     protected String phone;
     protected String password;
 
@@ -38,101 +40,116 @@ abstract class User {
 
     public String getId() { return id; }
     public String getName() { return name; }
+    public String getEmail() { return email; } 
     public boolean login(String inputId, String inputPass) {
         return this.id.equals(inputId) && this.password.equals(inputPass);
     }
 }
 
-// Student Class 
 class Student extends User {
     private CardType cardType;
-    private int birthYear; // For National ID validation
+    private int birthYear; 
 
     public Student(String id, String name, String email, String phone, String password, CardType cardType, int birthYear) {
         super(id, name, email, phone, password);
         this.cardType = cardType;
         this.birthYear = birthYear;
     }
-    
-    public CardType getCardType() { return cardType; }
 }
 
-// Admin Class 
 class Admin extends User {
     public Admin(String username, String password) {
         super(username, "Administrator", "admin@sys.com", "-", password);
     }
 }
 
-// Item Class 
 class Item {
     private String itemId;
     private String name;
     private String category;
-    private ItemStatus status;
+    private int totalQty;
+    private int currentQty;
 
-    public Item(String itemId, String name, String category) {
+    public Item(String itemId, String name, String category, int totalQty) {
         this.itemId = itemId;
         this.name = name;
         this.category = category;
-        this.status = ItemStatus.AVAILABLE;
+        this.totalQty = totalQty;
+        this.currentQty = totalQty;
     }
 
     public String getItemId() { return itemId; }
     public String getName() { return name; }
+    public int getTotalQty() { return totalQty; }
+    public int getCurrentQty() { return currentQty; }
+
+    public void decreaseQty() { if (currentQty > 0) currentQty--; }
+    public void increaseQty() { if (currentQty < totalQty) currentQty++; }
     public String getCategory() { return category; }
-    public ItemStatus getStatus() { return status; }
-    public void setStatus(ItemStatus status) { this.status = status; }
     
     @Override
     public String toString() { return name; }
 }
 
-// BorrowRequest Class 
 class BorrowRequest {
     private Student student;
     private Item item;
     private RequestType type;
     private RequestStatus status;
     private LocalDate requestDate;
+    private int daysRequested; 
 
-    public BorrowRequest(Student student, Item item, RequestType type) {
+    public BorrowRequest(Student student, Item item, RequestType type, int daysRequested) {
         this.student = student;
         this.item = item;
         this.type = type;
         this.status = RequestStatus.PENDING;
         this.requestDate = LocalDate.now();
+        this.daysRequested = daysRequested;
     }
 
     public Student getStudent() { return student; }
     public Item getItem() { return item; }
     public RequestType getType() { return type; }
     public RequestStatus getStatus() { return status; }
+    public int getDaysRequested() { return daysRequested; }
     public void setStatus(RequestStatus status) { this.status = status; }
 }
 
-// BorrowRecord Class 
 class BorrowRecord {
     private Student student;
     private Item item;
     private LocalDate borrowDate;
     private LocalDate dueDate;
     private LocalDate returnDate;
+    private boolean isExtended;
 
     public BorrowRecord(Student student, Item item) {
         this.student = student;
         this.item = item;
         this.borrowDate = LocalDate.now();
-        this.dueDate = LocalDate.now().plusDays(7); // ยืมได้ 7 วัน
+        this.dueDate = LocalDate.now().plusDays(7); 
+        this.isExtended = false;
+    }
+
+    // Constructor for Mock Data
+    public BorrowRecord(Student student, Item item, LocalDate customDueDate) {
+        this.student = student;
+        this.item = item;
+        this.borrowDate = customDueDate.minusDays(7);
+        this.dueDate = customDueDate;
+        this.isExtended = false;
     }
 
     public Student getStudent() { return student; }
     public Item getItem() { return item; }
     public LocalDate getDueDate() { return dueDate; }
     public LocalDate getReturnDate() { return returnDate; }
+    public boolean isExtended() { return isExtended; }
     
     public void extendDueDate(int days) {
         this.dueDate = this.dueDate.plusDays(days);
+        this.isExtended = true; 
     }
 
     public void markReturn(LocalDate date) {
@@ -144,29 +161,50 @@ class BorrowRecord {
 // 3. SERVICE LAYER (Business Logic)
 // ==========================================
 
-// Validation Service: ตรวจสอบสิทธิ์ตามสเปค 
-class ValidationService {
-    public static boolean validateStudentId(String studentId) {
-        // Spec: รหัส 2 ตัวแรก ต้องเป็นปีปัจจุบัน (สมมติ 68) ถอยหลังไป 3 ปี (68, 67, 66, 65)
-        if (studentId.length() < 2) return false;
-        try {
-            int yearPrefix = Integer.parseInt(studentId.substring(0, 2));
-            int currentYear = 68; // ตามสเปคระบุปีปัจจุบันคือ 68
-            return yearPrefix >= (currentYear - 3) && yearPrefix <= currentYear;
-        } catch (NumberFormatException e) {
-            return false;
-        }
-    }
+// [REAL IMPLEMENTATION] Email Service using javax.mail
+class EmailService {
+    // !!! แก้ไขข้อมูลตรงนี้ !!!
+    private static final String SENDER_EMAIL = "chanutsunatho@gmail.com"; 
+    private static final String APP_PASSWORD = "dcjj putl zrkz qmxw"; // รหัส 16 หลักจาก Google App Password
 
-    public static boolean validateAge(int birthYearAD) {
-        // Spec: อายุระหว่าง 18 - 22 ปี
-        int currentYearAD = LocalDate.now().getYear();
-        int age = currentYearAD - birthYearAD;
-        return age >= 18 && age <= 22;
+    public static void send(String recipientEmail, String subject, String body) {
+        // Run in background thread to prevent GUI freezing
+        new Thread(() -> {
+            System.out.println("⏳ Sending email to " + recipientEmail + "...");
+            
+            Properties props = new Properties();
+            props.put("mail.smtp.auth", "true");
+            props.put("mail.smtp.starttls.enable", "true");
+            props.put("mail.smtp.host", "smtp.gmail.com");
+            props.put("mail.smtp.port", "587");
+            props.put("mail.smtp.ssl.protocols", "TLSv1.2");
+
+            Session session = Session.getInstance(props, new Authenticator() {
+                @Override
+                protected PasswordAuthentication getPasswordAuthentication() {
+                    return new PasswordAuthentication(SENDER_EMAIL, APP_PASSWORD);
+                }
+            });
+
+            try {
+                Message message = new MimeMessage(session);
+                message.setFrom(new InternetAddress(SENDER_EMAIL));
+                message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(recipientEmail));
+                message.setSubject(subject);
+                message.setText(body);
+
+                Transport.send(message);
+
+                System.out.println("✅ Email Sent Successfully to: " + recipientEmail);
+
+            } catch (MessagingException e) {
+                System.err.println("❌ Failed to send email: " + e.getMessage());
+                // e.printStackTrace(); // Uncomment to debug
+            }
+        }).start();
     }
 }
 
-// Logic การคำนวณค่าปรับ 
 class FineCalculator {
     private static final int FINE_PER_DAY = 100;
 
@@ -179,7 +217,6 @@ class FineCalculator {
     }
 }
 
-// DataStore: ทำหน้าที่แทน Database 
 class DataStore {
     public static List<User> users = new ArrayList<>();
     public static List<Item> items = new ArrayList<>();
@@ -187,13 +224,26 @@ class DataStore {
     public static List<BorrowRecord> records = new ArrayList<>();
 
     static {
-        // Initial Data
-        users.add(new Admin("admin", "admin")); // Admin Login 
+        // Admin
+        users.add(new Admin("admin", "admin")); 
         
-        items.add(new Item("I01", "Projector Sony", "AV"));
-        items.add(new Item("I02", "MacBook Pro M2", "IT"));
-        items.add(new Item("I03", "Canon Camera", "AV"));
-        items.add(new Item("I04", "Microphone Shure", "Audio"));
+        // Items
+        items.add(new Item("I01", "Projector Sony", "AV", 5));
+        items.add(new Item("I02", "MacBook Pro M2", "IT", 2));
+        items.add(new Item("I03", "Canon Camera", "AV", 3));
+        items.add(new Item("I04", "Microphone Shure", "Audio", 10));
+        
+        // Mock Data
+        Student s1 = new Student("66001", "Good Student", "test_student@gmail.com", "081", "1234", CardType.STUDENT_CARD, 2002);
+        users.add(s1);
+        
+        Student s2 = new Student("66999", "Late Student", "late_student@gmail.com", "089", "1234", CardType.STUDENT_CARD, 2001);
+        users.add(s2);
+
+        Item i2 = items.get(1); // MacBook
+        i2.decreaseQty(); 
+        BorrowRecord lateRec = new BorrowRecord(s2, i2, LocalDate.now().minusDays(3)); 
+        records.add(lateRec);
     }
 }
 
@@ -206,15 +256,23 @@ public class SmartBorrowSystem extends JFrame {
     private JPanel mainPanel = new JPanel(cardLayout);
     private User currentUser;
 
+    private JPanel adminPanel;
+    private JPanel studentPanel;
+
     public SmartBorrowSystem() {
-        setTitle("University Borrowing System v1.0");
-        setSize(1000, 700);
+        setTitle("University Borrowing System v2.0 (Real Email)");
+        setSize(1100, 700); 
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
 
-        // Add Panels
         mainPanel.add(createLoginPanel(), "LOGIN");
         mainPanel.add(createRegisterPanel(), "REGISTER");
+        
+        studentPanel = createStudentPanel();
+        adminPanel = createAdminPanel();
+        
+        mainPanel.add(studentPanel, "STUDENT");
+        mainPanel.add(adminPanel, "ADMIN");
         
         add(mainPanel);
         cardLayout.show(mainPanel, "LOGIN");
@@ -235,7 +293,6 @@ public class SmartBorrowSystem extends JFrame {
         JButton btnLogin = new JButton("Login");
         JButton btnReg = new JButton("Register");
 
-        // UI Layout
         gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 2; panel.add(title, gbc);
         gbc.gridy = 1; gbc.gridwidth = 1; panel.add(new JLabel("ID / Card ID:"), gbc);
         gbc.gridx = 1; panel.add(tfUser, gbc);
@@ -244,7 +301,6 @@ public class SmartBorrowSystem extends JFrame {
         gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 2; panel.add(btnLogin, gbc);
         gbc.gridy = 4; panel.add(btnReg, gbc);
 
-        // Actions
         btnLogin.addActionListener(e -> {
             String id = tfUser.getText();
             String pass = new String(pfPass.getPassword());
@@ -256,10 +312,10 @@ public class SmartBorrowSystem extends JFrame {
             if (foundUser != null) {
                 currentUser = foundUser;
                 if (currentUser instanceof Admin) {
-                    mainPanel.add(createAdminPanel(), "ADMIN");
+                    refreshAdminData();
                     cardLayout.show(mainPanel, "ADMIN");
                 } else {
-                    mainPanel.add(createStudentPanel(), "STUDENT");
+                    refreshStudentData();
                     cardLayout.show(mainPanel, "STUDENT");
                 }
             } else {
@@ -278,69 +334,53 @@ public class SmartBorrowSystem extends JFrame {
         gbc.insets = new Insets(5, 5, 5, 5);
 
         JComboBox<CardType> cbType = new JComboBox<>(CardType.values());
-        JTextField tfId = new JTextField(15); // Card ID
+        JTextField tfId = new JTextField(15);
         JTextField tfName = new JTextField(15);
         JTextField tfEmail = new JTextField(15);
         JTextField tfPhone = new JTextField(15);
-        JTextField tfBirthYear = new JTextField(15); // For Age Validation
+        JTextField tfBirthYear = new JTextField(15);
         JPasswordField pfPass = new JPasswordField(15);
         JButton btnSave = new JButton("Confirm Registration");
         JButton btnBack = new JButton("Back");
 
-        // Components Layout
         int y = 0;
         gbc.gridx = 0; gbc.gridy = y++; gbc.gridwidth = 2; panel.add(new JLabel("Register New Student"), gbc);
-        
-        gbc.gridwidth = 1; gbc.gridy = y; panel.add(new JLabel("Card Type:"), gbc);
-        gbc.gridx = 1; panel.add(cbType, gbc);
-
-        gbc.gridx = 0; gbc.gridy = ++y; panel.add(new JLabel("ID Number:"), gbc);
-        gbc.gridx = 1; panel.add(tfId, gbc);
-
-        gbc.gridx = 0; gbc.gridy = ++y; panel.add(new JLabel("Full Name:"), gbc);
-        gbc.gridx = 1; panel.add(tfName, gbc);
-        
-        gbc.gridx = 0; gbc.gridy = ++y; panel.add(new JLabel("Birth Year (AD):"), gbc);
-        gbc.gridx = 1; panel.add(tfBirthYear, gbc);
-
-        gbc.gridx = 0; gbc.gridy = ++y; panel.add(new JLabel("Email:"), gbc);
-        gbc.gridx = 1; panel.add(tfEmail, gbc);
-
-        gbc.gridx = 0; gbc.gridy = ++y; panel.add(new JLabel("Phone:"), gbc);
-        gbc.gridx = 1; panel.add(tfPhone, gbc);
-
-        gbc.gridx = 0; gbc.gridy = ++y; panel.add(new JLabel("Password:"), gbc);
-        gbc.gridx = 1; panel.add(pfPass, gbc);
-
+        gbc.gridwidth = 1; gbc.gridy = y; panel.add(new JLabel("Card Type:"), gbc); gbc.gridx = 1; panel.add(cbType, gbc);
+        gbc.gridx = 0; gbc.gridy = ++y; panel.add(new JLabel("ID Number:"), gbc); gbc.gridx = 1; panel.add(tfId, gbc);
+        gbc.gridx = 0; gbc.gridy = ++y; panel.add(new JLabel("Full Name:"), gbc); gbc.gridx = 1; panel.add(tfName, gbc);
+        gbc.gridx = 0; gbc.gridy = ++y; panel.add(new JLabel("Birth Year (AD):"), gbc); gbc.gridx = 1; panel.add(tfBirthYear, gbc);
+        gbc.gridx = 0; gbc.gridy = ++y; panel.add(new JLabel("Email:"), gbc); gbc.gridx = 1; panel.add(tfEmail, gbc);
+        gbc.gridx = 0; gbc.gridy = ++y; panel.add(new JLabel("Phone:"), gbc); gbc.gridx = 1; panel.add(tfPhone, gbc);
+        gbc.gridx = 0; gbc.gridy = ++y; panel.add(new JLabel("Password:"), gbc); gbc.gridx = 1; panel.add(pfPass, gbc);
         gbc.gridx = 0; gbc.gridy = ++y; gbc.gridwidth = 2; panel.add(btnSave, gbc);
         gbc.gridy = ++y; panel.add(btnBack, gbc);
 
-        // Logic 
         btnSave.addActionListener(e -> {
             try {
                 CardType type = (CardType) cbType.getSelectedItem();
                 String id = tfId.getText();
+                String name = tfName.getText();
+                String email = tfEmail.getText();
+                String pass = new String(pfPass.getPassword());
                 int bYear = Integer.parseInt(tfBirthYear.getText());
 
-                // 1. Validate ID/Age Rules
-                boolean isValid = false;
-                if (type == CardType.STUDENT_CARD) {
-                    isValid = ValidationService.validateStudentId(id);
-                    if (!isValid) JOptionPane.showMessageDialog(this, "Invalid Student ID! Must start with 65-68.");
-                } else {
-                    isValid = ValidationService.validateAge(bYear);
-                    if (!isValid) JOptionPane.showMessageDialog(this, "Invalid Age! Must be 18-22 years old.");
+                if (id.isEmpty() || name.isEmpty() || pass.isEmpty()) {
+                     JOptionPane.showMessageDialog(this, "Please fill all fields.");
+                     return;
                 }
 
-                if (isValid) {
-                    Student s = new Student(id, tfName.getText(), tfEmail.getText(), tfPhone.getText(), new String(pfPass.getPassword()), type, bYear);
-                    DataStore.users.add(s);
-                    JOptionPane.showMessageDialog(this, "Registration Successful!");
-                    cardLayout.show(mainPanel, "LOGIN");
-                }
+                Student s = new Student(id, name, email, tfPhone.getText(), pass, type, bYear);
+                DataStore.users.add(s);
+                
+                // [EMAIL] Welcome
+                EmailService.send(email, "Welcome to Smart Borrow System", 
+                    "Registration successful!\nUsername: " + id + "\n\nYou can now login to the system.");
+                
+                JOptionPane.showMessageDialog(this, "Registration Successful! Email sent.");
+                cardLayout.show(mainPanel, "LOGIN");
 
             } catch (Exception ex) {
-                JOptionPane.showMessageDialog(this, "Please fill all fields correctly.");
+                JOptionPane.showMessageDialog(this, "Error: Check inputs.");
             }
         });
 
@@ -349,88 +389,98 @@ public class SmartBorrowSystem extends JFrame {
     }
 
     // --- STUDENT PANEL ---
+    private DefaultTableModel stItemModel, stStatusModel;
+
     private JPanel createStudentPanel() {
         JTabbedPane tabs = new JTabbedPane();
         
         // Tab 1: Browse Items
         JPanel browsePanel = new JPanel(new BorderLayout());
-        DefaultTableModel itemModel = new DefaultTableModel(new String[]{"ID", "Name", "Category", "Status"}, 0);
-        JTable itemTable = new JTable(itemModel);
+        stItemModel = new DefaultTableModel(new String[]{"ID", "Name", "Category", "Stock (Avail/Total)"}, 0);
+        JTable itemTable = new JTable(stItemModel);
         JButton btnBorrow = new JButton("Borrow Item");
-
-        Runnable refreshItems = () -> {
-            itemModel.setRowCount(0);
-            for (Item i : DataStore.items) itemModel.addRow(new Object[]{i.getItemId(), i.getName(), i.getCategory(), i.getStatus()});
-        };
-        refreshItems.run();
 
         btnBorrow.addActionListener(e -> {
             int row = itemTable.getSelectedRow();
             if (row != -1) {
                 Item item = DataStore.items.get(row);
-                if (item.getStatus() == ItemStatus.AVAILABLE) {
-                    DataStore.requests.add(new BorrowRequest((Student) currentUser, item, RequestType.NEW_BORROW));
+                
+                boolean alreadyBorrowed = DataStore.records.stream()
+                    .anyMatch(r -> r.getStudent().equals(currentUser) && r.getItem().equals(item) && r.getReturnDate() == null);
+                
+                boolean pendingRequest = DataStore.requests.stream()
+                    .anyMatch(r -> r.getStudent().equals(currentUser) && r.getItem().equals(item) && r.getStatus() == RequestStatus.PENDING);
+
+                if (alreadyBorrowed) {
+                    JOptionPane.showMessageDialog(this, "You are already borrowing this item!", "Error", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                if (pendingRequest) {
+                    JOptionPane.showMessageDialog(this, "You have a pending request for this item!", "Error", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+
+                if (item.getCurrentQty() > 0) {
+                    DataStore.requests.add(new BorrowRequest((Student) currentUser, item, RequestType.NEW_BORROW, 7));
                     JOptionPane.showMessageDialog(this, "Borrow Request Sent!");
+                    refreshStudentData();
                 } else {
-                    JOptionPane.showMessageDialog(this, "Item is not available.");
+                    JOptionPane.showMessageDialog(this, "Item Out of Stock!", "Error", JOptionPane.ERROR_MESSAGE);
                 }
             }
         });
-        
         browsePanel.add(new JScrollPane(itemTable), BorderLayout.CENTER);
         browsePanel.add(btnBorrow, BorderLayout.SOUTH);
 
-        // Tab 2: My Status & Renew 
+        // Tab 2: My Status
         JPanel statusPanel = new JPanel(new BorderLayout());
-        DefaultTableModel statusModel = new DefaultTableModel(new String[]{"Item", "Status", "Action"}, 0);
-        JTable statusTable = new JTable(statusModel);
-        JButton btnRenew = new JButton("Renew Selected Item");
+        stStatusModel = new DefaultTableModel(new String[]{"Item", "Status", "Type"}, 0);
+        JTable statusTable = new JTable(stStatusModel);
+        JButton btnAction = new JButton("Request Extension / Renew");
 
-        Runnable refreshStatus = () -> {
-            statusModel.setRowCount(0);
-            // Show Requests
-            for (BorrowRequest req : DataStore.requests) {
-                if (req.getStudent().equals(currentUser) && req.getStatus() != RequestStatus.COMPLETED) {
-                    statusModel.addRow(new Object[]{req.getItem().getName(), "REQ: " + req.getStatus(), req.getType()});
-                }
-            }
-            // Show Active Records
-            for (BorrowRecord rec : DataStore.records) {
-                if (rec.getStudent().equals(currentUser) && rec.getReturnDate() == null) {
-                    statusModel.addRow(new Object[]{rec.getItem().getName(), "BORROWED (Due: " + rec.getDueDate() + ")", "Active"});
-                }
-            }
-        };
-
-        tabs.addChangeListener(e -> { refreshItems.run(); refreshStatus.run(); });
-
-        btnRenew.addActionListener(e -> {
+        btnAction.addActionListener(e -> {
             int row = statusTable.getSelectedRow();
             if (row != -1) {
-                String status = statusModel.getValueAt(row, 1).toString();
+                String status = stStatusModel.getValueAt(row, 1).toString();
+                
                 if (status.startsWith("BORROWED")) {
-                    // Find record
-                    String itemName = statusModel.getValueAt(row, 0).toString();
+                    String itemName = stStatusModel.getValueAt(row, 0).toString();
                     BorrowRecord rec = DataStore.records.stream()
-                            .filter(r -> r.getItem().getName().equals(itemName) && r.getStudent().equals(currentUser))
+                            .filter(r -> r.getItem().getName().equals(itemName) && r.getStudent().equals(currentUser) && r.getReturnDate() == null)
                             .findFirst().orElse(null);
                     
                     if (rec != null) {
-                        DataStore.requests.add(new BorrowRequest((Student) currentUser, rec.getItem(), RequestType.RENEW));
-                        JOptionPane.showMessageDialog(this, "Renew Request Sent!");
-                        refreshStatus.run();
+                        String[] options = {"Renew (Start New Cycle)", "Extend Due Date (Delay Return)"};
+                        int choice = JOptionPane.showOptionDialog(this, "Choose request type:", "Request Option",
+                                JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
+
+                        if (choice == 0) {
+                            DataStore.requests.add(new BorrowRequest((Student) currentUser, rec.getItem(), RequestType.RENEW, 7));
+                            JOptionPane.showMessageDialog(this, "Renew Request Sent!");
+                        } else if (choice == 1) {
+                            String[] dayOptions = {"1 Day", "3 Days"};
+                            int dayChoice = JOptionPane.showOptionDialog(this, "Select extension duration:", "Extend Due Date",
+                                    JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, dayOptions, dayOptions[0]);
+                            
+                            int daysToAdd = (dayChoice == 0) ? 1 : 3; 
+                            DataStore.requests.add(new BorrowRequest((Student) currentUser, rec.getItem(), RequestType.EXTEND, daysToAdd));
+                            JOptionPane.showMessageDialog(this, "Extension Request Sent (" + daysToAdd + " days)!");
+                        }
+                        refreshStudentData();
                     }
                 } else {
-                    JOptionPane.showMessageDialog(this, "Can only renew currently borrowed items.");
+                    JOptionPane.showMessageDialog(this, "Can only request on currently BORROWED items.");
                 }
+            } else {
+                JOptionPane.showMessageDialog(this, "Please select an item.");
             }
         });
-
         statusPanel.add(new JScrollPane(statusTable), BorderLayout.CENTER);
-        statusPanel.add(btnRenew, BorderLayout.SOUTH);
+        statusPanel.add(btnAction, BorderLayout.SOUTH);
 
         tabs.addTab("Borrow Items", browsePanel);
         tabs.addTab("My Status", statusPanel);
+        tabs.addChangeListener(e -> refreshStudentData());
 
         JPanel container = new JPanel(new BorderLayout());
         JButton logout = new JButton("Logout");
@@ -441,111 +491,81 @@ public class SmartBorrowSystem extends JFrame {
     }
 
     // --- ADMIN PANEL ---
+    private DefaultTableModel adReqModel, adRecModel;
+
     private JPanel createAdminPanel() {
         JTabbedPane tabs = new JTabbedPane();
 
         // Tab 1: Approvals
         JPanel approvePanel = new JPanel(new BorderLayout());
-        DefaultTableModel reqModel = new DefaultTableModel(new String[]{"Student", "Item", "Type", "Status"}, 0);
-        JTable reqTable = new JTable(reqModel);
+        String[] reqCols = {"Student ID", "Name", "Item", "Type", "Details", "Status"};
+        adReqModel = new DefaultTableModel(reqCols, 0);
+        JTable reqTable = new JTable(adReqModel);
         JPanel btnPanel = new JPanel();
         JButton btnApprove = new JButton("Approve");
         JButton btnReject = new JButton("Reject");
         
-        Runnable refreshReq = () -> {
-            reqModel.setRowCount(0);
-            for (BorrowRequest r : DataStore.requests) {
-                if (r.getStatus() == RequestStatus.PENDING) {
-                    reqModel.addRow(new Object[]{r.getStudent().getName(), r.getItem().getName(), r.getType(), r.getStatus()});
-                }
-            }
-        };
+        btnApprove.setBackground(new Color(144, 238, 144));
+        btnReject.setBackground(new Color(255, 99, 71));
 
-        btnApprove.addActionListener(e -> {
-            int row = reqTable.getSelectedRow();
-            if (row != -1) {
-                BorrowRequest req = findRequestAtRow(row, reqModel);
-                if (req != null) {
-                    req.setStatus(RequestStatus.APPROVED);
-                    
-                    if (req.getType() == RequestType.NEW_BORROW) {
-                        req.getItem().setStatus(ItemStatus.BORROWED);
-                        DataStore.records.add(new BorrowRecord(req.getStudent(), req.getItem()));
-                    } else {
-                        // Renew Case 
-                        BorrowRecord rec = findRecord(req.getStudent(), req.getItem());
-                        if (rec != null) rec.extendDueDate(7);
-                    }
-                    
-                    refreshReq.run();
-                }
-            }
-        });
-
-        btnReject.addActionListener(e -> {
-            int row = reqTable.getSelectedRow();
-            if (row != -1) {
-                BorrowRequest req = findRequestAtRow(row, reqModel);
-                if (req != null) {
-                    req.setStatus(RequestStatus.REJECTED);
-                    refreshReq.run();
-                }
-            }
-        });
+        btnApprove.addActionListener(e -> handleAdminAction(reqTable, true));
+        btnReject.addActionListener(e -> handleAdminAction(reqTable, false));
 
         btnPanel.add(btnApprove);
         btnPanel.add(btnReject);
         approvePanel.add(new JScrollPane(reqTable), BorderLayout.CENTER);
         approvePanel.add(btnPanel, BorderLayout.SOUTH);
 
-        // Tab 2: Returns & Fines 
+        // Tab 2: Returns
         JPanel returnPanel = new JPanel(new BorderLayout());
-        DefaultTableModel recModel = new DefaultTableModel(new String[]{"Student", "Item", "Due Date"}, 0);
-        JTable recTable = new JTable(recModel);
-        JButton btnReturn = new JButton("Process Return");
-
-        Runnable refreshRec = () -> {
-            recModel.setRowCount(0);
-            for (BorrowRecord r : DataStore.records) {
-                if (r.getReturnDate() == null) {
-                    recModel.addRow(new Object[]{r.getStudent().getName(), r.getItem().getName(), r.getDueDate()});
-                }
-            }
-        };
+        adRecModel = new DefaultTableModel(new String[]{"Student", "Item", "Due Date", "Status", "Current Fine"}, 0);
+        JTable recTable = new JTable(adRecModel);
+        JButton btnReturn = new JButton("Process Return (Today)");
 
         btnReturn.addActionListener(e -> {
             int row = recTable.getSelectedRow();
             if (row != -1) {
+                String sName = adRecModel.getValueAt(row, 0).toString();
+                String iName = adRecModel.getValueAt(row, 1).toString();
+
                 BorrowRecord rec = DataStore.records.stream()
-                    .filter(r -> r.getStudent().getName().equals(recModel.getValueAt(row, 0)) && r.getReturnDate() == null)
+                    .filter(r -> r.getStudent().getName().equals(sName) && r.getItem().getName().equals(iName) && r.getReturnDate() == null)
                     .findFirst().orElse(null);
                 
                 if (rec != null) {
-                    // Mock Return Date selection
-                    String[] opts = {"Return Today", "Return Late (Test Fine)"};
-                    int choice = JOptionPane.showOptionDialog(this, "Select Return Date", "Return", 0, 3, null, opts, opts[0]);
+                    LocalDate returnDate = LocalDate.now(); 
+                    int fine = FineCalculator.calculate(rec.getDueDate(), returnDate);
+
+                    if (fine > 0) {
+                        int confirm = JOptionPane.showConfirmDialog(this, 
+                            "⚠️ ITEM IS OVERDUE!\nFine Amount: " + fine + " THB\n\nConfirm Return?", 
+                            "Overdue Warning", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                        
+                        if (confirm != JOptionPane.YES_OPTION) return; 
+                    }
+
+                    rec.markReturn(returnDate);
+                    rec.getItem().increaseQty();
                     
-                    LocalDate retDate = LocalDate.now();
-                    if (choice == 1) retDate = rec.getDueDate().plusDays(5); // Mock Late
-
-                    rec.markReturn(retDate);
-                    rec.getItem().setStatus(ItemStatus.AVAILABLE); // 
-
-                    int fine = FineCalculator.calculate(rec.getDueDate(), retDate);
                     String msg = "Item Returned.";
-                    if (fine > 0) msg += "\n⚠️ LATE FEE: " + fine + " THB"; // 
-                    
+                    if (fine > 0) msg += " Fine Paid: " + fine + " THB";
                     JOptionPane.showMessageDialog(this, msg);
-                    refreshRec.run();
+                    
+                    // [EMAIL] Return & Fine
+                    EmailService.send(rec.getStudent().getEmail(), "Item Returned: " + rec.getItem().getName(), 
+                        "You have returned '" + rec.getItem().getName() + "'.\n" +
+                        "Date: " + returnDate + "\n" +
+                        "Fine: " + fine + " THB.");
+                    
+                    refreshAdminData();
                 }
             }
         });
-
-        tabs.addChangeListener(e -> { refreshReq.run(); refreshRec.run(); });
         
         returnPanel.add(new JScrollPane(recTable), BorderLayout.CENTER);
         returnPanel.add(btnReturn, BorderLayout.SOUTH);
 
+        tabs.addChangeListener(e -> refreshAdminData());
         tabs.addTab("Pending Requests", approvePanel);
         tabs.addTab("Active Returns", returnPanel);
 
@@ -557,19 +577,121 @@ public class SmartBorrowSystem extends JFrame {
         return container;
     }
 
-    // Helper to find object from table selection
-    private BorrowRequest findRequestAtRow(int row, DefaultTableModel model) {
-        String sName = model.getValueAt(row, 0).toString();
-        String iName = model.getValueAt(row, 1).toString();
-        return DataStore.requests.stream()
-                .filter(r -> r.getStudent().getName().equals(sName) && r.getItem().getName().equals(iName) && r.getStatus() == RequestStatus.PENDING)
-                .findFirst().orElse(null);
+    private void handleAdminAction(JTable table, boolean isApprove) {
+        int row = table.getSelectedRow();
+        if (row != -1) {
+            String sId = adReqModel.getValueAt(row, 0).toString();
+            String iName = adReqModel.getValueAt(row, 2).toString();
+
+            BorrowRequest req = DataStore.requests.stream()
+                    .filter(r -> r.getStudent().getId().equals(sId) && r.getItem().getName().equals(iName) && r.getStatus() == RequestStatus.PENDING)
+                    .findFirst().orElse(null);
+
+            if (req != null) {
+                String email = req.getStudent().getEmail();
+                if (isApprove) {
+                    if (req.getType() == RequestType.NEW_BORROW) {
+                        if (req.getItem().getCurrentQty() > 0) {
+                            req.getItem().decreaseQty();
+                            req.setStatus(RequestStatus.APPROVED);
+                            DataStore.records.add(new BorrowRecord(req.getStudent(), req.getItem()));
+                            
+                            // [EMAIL] Approve Borrow
+                            EmailService.send(email, "Borrow Approved", "Your request to borrow '" + req.getItem().getName() + "' has been approved.");
+                            JOptionPane.showMessageDialog(this, "Request APPROVED. Stock: " + req.getItem().getCurrentQty());
+                        } else {
+                            JOptionPane.showMessageDialog(this, "Cannot Approve: Item Out of Stock!");
+                            return; 
+                        }
+                    } else if (req.getType() == RequestType.RENEW) {
+                        req.setStatus(RequestStatus.APPROVED);
+                        BorrowRecord rec = findRecord(req);
+                        if (rec != null) rec.extendDueDate(7);
+                        
+                        // [EMAIL] Approve Renew
+                        EmailService.send(email, "Renew Approved", "Your item '" + req.getItem().getName() + "' has been renewed for 7 days.");
+                        JOptionPane.showMessageDialog(this, "Renew Approved.");
+                        
+                    } else if (req.getType() == RequestType.EXTEND) {
+                        req.setStatus(RequestStatus.APPROVED);
+                        BorrowRecord rec = findRecord(req);
+                        if (rec != null) rec.extendDueDate(req.getDaysRequested());
+                        
+                        // [EMAIL] Approve Extend
+                        EmailService.send(email, "Extension Approved", "Your due date for '" + req.getItem().getName() + "' has been extended by " + req.getDaysRequested() + " days.");
+                        JOptionPane.showMessageDialog(this, "Extension Approved.");
+                    }
+                    
+                } else {
+                    req.setStatus(RequestStatus.REJECTED);
+                    // [EMAIL] Reject
+                    EmailService.send(email, "Request Rejected", "Your request for '" + req.getItem().getName() + "' was rejected by Admin.");
+                    JOptionPane.showMessageDialog(this, "Request REJECTED.");
+                }
+                refreshAdminData();
+            }
+        }
+    }
+    
+    private BorrowRecord findRecord(BorrowRequest req) {
+        return DataStore.records.stream()
+            .filter(r -> r.getStudent().equals(req.getStudent()) && r.getItem().equals(req.getItem()) && r.getReturnDate() == null)
+            .findFirst().orElse(null);
     }
 
-    private BorrowRecord findRecord(Student s, Item i) {
-        return DataStore.records.stream()
-                .filter(r -> r.getStudent().equals(s) && r.getItem().equals(i) && r.getReturnDate() == null)
-                .findFirst().orElse(null);
+    private void refreshStudentData() {
+        if (stItemModel == null || currentUser == null) return;
+        stItemModel.setRowCount(0);
+        for (Item i : DataStore.items) {
+            String stockInfo = i.getCurrentQty() + " / " + i.getTotalQty();
+            stItemModel.addRow(new Object[]{i.getItemId(), i.getName(), i.getCategory(), stockInfo});
+        }
+        stStatusModel.setRowCount(0);
+        for (BorrowRequest req : DataStore.requests) {
+            if (req.getStudent().equals(currentUser) && req.getStatus() != RequestStatus.COMPLETED) {
+                String detail = req.getType().toString();
+                if (req.getType() == RequestType.EXTEND) detail += " (+" + req.getDaysRequested() + " days)";
+                stStatusModel.addRow(new Object[]{req.getItem().getName(), "REQ: " + req.getStatus(), detail});
+            }
+        }
+        for (BorrowRecord rec : DataStore.records) {
+            if (rec.getStudent().equals(currentUser)) {
+                if (rec.getReturnDate() == null) {
+                    stStatusModel.addRow(new Object[]{rec.getItem().getName(), "BORROWED (Due: " + rec.getDueDate() + ")", "Active"});
+                } else {
+                    String status = "RETURNED (Normal)";
+                    if (rec.getReturnDate().isAfter(rec.getDueDate())) status = "RETURNED LATE";
+                    stStatusModel.addRow(new Object[]{rec.getItem().getName(), status, "History"});
+                }
+            }
+        }
+    }
+
+    private void refreshAdminData() {
+        if (adReqModel == null) return;
+        adReqModel.setRowCount(0);
+        for (BorrowRequest r : DataStore.requests) {
+            if (r.getStatus() == RequestStatus.PENDING) {
+                String detail = "-";
+                if (r.getType() == RequestType.EXTEND) detail = "+" + r.getDaysRequested() + " Days";
+                adReqModel.addRow(new Object[]{r.getStudent().getId(), r.getStudent().getName(), r.getItem().getName(), r.getType(), detail, r.getStatus()});
+            }
+        }
+        adRecModel.setRowCount(0);
+        LocalDate today = LocalDate.now();
+        for (BorrowRecord r : DataStore.records) {
+            if (r.getReturnDate() == null) {
+                String status = "BORROWED";
+                int currentFine = 0;
+                if (today.isAfter(r.getDueDate())) {
+                    status = "OVERDUE (LATE)";
+                    currentFine = FineCalculator.calculate(r.getDueDate(), today);
+                } else if (r.isExtended()) {
+                    status = "EXTENDED";
+                }
+                adRecModel.addRow(new Object[]{r.getStudent().getName(), r.getItem().getName(), r.getDueDate(), status, currentFine + " THB"});
+            }
+        }
     }
 
     public static void main(String[] args) {
