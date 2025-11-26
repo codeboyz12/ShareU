@@ -117,6 +117,7 @@ class BorrowRequest {
     public RequestType getType() { return type; }
     public RequestStatus getStatus() { return status; }
     public int getDaysRequested() { return daysRequested; }
+    public LocalDate getRequestDate() { return requestDate; }
     public void setStatus(RequestStatus status) { this.status = status; }
 }
 
@@ -148,6 +149,7 @@ class BorrowRecord {
     public Item getItem() { return item; }
     public LocalDate getDueDate() { return dueDate; }
     public LocalDate getReturnDate() { return returnDate; }
+    public LocalDate getBorrowDate() { return borrowDate; }
     public boolean isExtended() { return isExtended; }
     
     public void extendDueDate(int days) {
@@ -169,12 +171,10 @@ class EmailService {
     private static final String SENDER_EMAIL = "chanutsunatho@gmail.com"; 
     private static final String APP_PASSWORD = "dcjj putl zrkz qmxw"; 
 
-    // ส่งแบบข้อความปกติ (Overload)
     public static void send(String recipientEmail, String subject, String body) {
         sendWithAttachment(recipientEmail, subject, body, null);
     }
 
-    // ส่งแบบมีไฟล์แนบ
     public static void sendWithAttachment(String recipientEmail, String subject, String body, String filePath) {
         new Thread(() -> {
             System.out.println("⏳ Sending email to " + recipientEmail + "...");
@@ -199,15 +199,12 @@ class EmailService {
                 message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(recipientEmail));
                 message.setSubject(subject);
 
-                // Setup Multipart content
                 Multipart multipart = new MimeMultipart();
 
-                // Part 1: Text Body
                 BodyPart messageBodyPart = new MimeBodyPart();
                 messageBodyPart.setText(body);
                 multipart.addBodyPart(messageBodyPart);
 
-                // Part 2: Attachment (ถ้ามีไฟล์ path ส่งมา)
                 if (filePath != null && !filePath.isEmpty()) {
                     File file = new File(filePath);
                     if (file.exists()) {
@@ -219,7 +216,6 @@ class EmailService {
                         System.out.println("📎 Attaching file: " + file.getName());
                     } else {
                         System.err.println("⚠️ Attachment file not found: " + filePath);
-                        // ถ้าหาไฟล์ไม่เจอ จะส่งแค่ข้อความแทน ไม่ให้โปรแกรมพัง
                     }
                 }
 
@@ -280,8 +276,8 @@ public class SmartBorrowSystem extends JFrame {
     private JPanel studentPanel;
 
     public SmartBorrowSystem() {
-        setTitle("University Borrowing System v2.2 (Register Attachment)");
-        setSize(1100, 700); 
+        setTitle("ShareU"); // [UPDATED] Changed Title
+        setSize(1200, 700); // Increased width for more columns
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
 
@@ -300,8 +296,8 @@ public class SmartBorrowSystem extends JFrame {
         panel.setBackground(new Color(240, 248, 255));
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(10, 10, 10, 10);
-        JLabel title = new JLabel("Smart Borrow System");
-        title.setFont(new Font("SansSerif", Font.BOLD, 24));
+        JLabel title = new JLabel("ShareU"); // [UPDATED] Changed Title Label
+        title.setFont(new Font("SansSerif", Font.BOLD, 32));
         JTextField tfUser = new JTextField(20);
         JPasswordField pfPass = new JPasswordField(20);
         JButton btnLogin = new JButton("Login");
@@ -329,7 +325,7 @@ public class SmartBorrowSystem extends JFrame {
         return panel;
     }
 
-    // --- REGISTER PANEL (Updated) ---
+    // --- REGISTER PANEL ---
     private JPanel createRegisterPanel() {
         JPanel panel = new JPanel(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
@@ -346,7 +342,7 @@ public class SmartBorrowSystem extends JFrame {
         JButton btnBack = new JButton("Back");
 
         int y = 0;
-        gbc.gridx = 0; gbc.gridy = y++; gbc.gridwidth = 2; panel.add(new JLabel("Register New Student"), gbc);
+        gbc.gridx = 0; gbc.gridy = y++; gbc.gridwidth = 2; panel.add(new JLabel("Register New ShareU Member"), gbc);
         gbc.gridwidth = 1; gbc.gridy = y; panel.add(new JLabel("Card Type:"), gbc); gbc.gridx = 1; panel.add(cbType, gbc);
         gbc.gridx = 0; gbc.gridy = ++y; panel.add(new JLabel("ID Number:"), gbc); gbc.gridx = 1; panel.add(tfId, gbc);
         gbc.gridx = 0; gbc.gridy = ++y; panel.add(new JLabel("Full Name:"), gbc); gbc.gridx = 1; panel.add(tfName, gbc);
@@ -375,11 +371,10 @@ public class SmartBorrowSystem extends JFrame {
                 DataStore.users.add(s);
                 
                 // [EMAIL WITH ATTACHMENT]
-                // !!! แก้ชื่อไฟล์ตรงนี้ให้ตรงกับไฟล์ที่คุณมี !!!
                 String attachmentPath = "borrow_term_req.pdf"; 
                 
                 EmailService.sendWithAttachment(email, 
-                    "Welcome to Smart Borrow System", 
+                    "Welcome to ShareU", 
                     "Registration successful!\n\nAttached is the User Manual / Rules for borrowing items.",
                     attachmentPath
                 );
@@ -420,8 +415,10 @@ public class SmartBorrowSystem extends JFrame {
         });
         browsePanel.add(new JScrollPane(itemTable), BorderLayout.CENTER);
         browsePanel.add(btnBorrow, BorderLayout.SOUTH);
+        
         JPanel statusPanel = new JPanel(new BorderLayout());
-        stStatusModel = new DefaultTableModel(new String[]{"Item", "Status", "Type"}, 0);
+        // [UPDATED] Added Date Columns for Student
+        stStatusModel = new DefaultTableModel(new String[]{"Item", "Status", "Type", "Borrow Date", "Due/Return Date"}, 0);
         JTable statusTable = new JTable(stStatusModel);
         JButton btnAction = new JButton("Request Extension / Renew");
         btnAction.addActionListener(e -> {
@@ -479,8 +476,10 @@ public class SmartBorrowSystem extends JFrame {
         btnPanel.add(btnApprove); btnPanel.add(btnReject);
         approvePanel.add(new JScrollPane(reqTable), BorderLayout.CENTER);
         approvePanel.add(btnPanel, BorderLayout.SOUTH);
+        
         JPanel returnPanel = new JPanel(new BorderLayout());
-        adRecModel = new DefaultTableModel(new String[]{"Student", "Item", "Due Date", "Status", "Current Fine"}, 0);
+        // [UPDATED] Added Borrow Date Column for Admin
+        adRecModel = new DefaultTableModel(new String[]{"Student", "Item", "Borrow Date", "Due Date", "Status", "Current Fine"}, 0);
         JTable recTable = new JTable(adRecModel);
         JPanel returnBtnPanel = new JPanel();
         JButton btnReturn = new JButton("Process Return");
@@ -495,7 +494,7 @@ public class SmartBorrowSystem extends JFrame {
                 if (rec != null) {
                     long daysLeft = ChronoUnit.DAYS.between(LocalDate.now(), rec.getDueDate());
                     String subject = "Reminder: Return " + rec.getItem().getName();
-                    String body = "Hello " + rec.getStudent().getName() + ",\n\nYou have " + daysLeft + " days left to return '" + rec.getItem().getName() + "'.";
+                    String body = "Hello " + rec.getStudent().getName() + ",\n\nYou have " + daysLeft + " days left to return '" + rec.getItem().getName() + "'.\nBorrow Date: " + rec.getBorrowDate();
                     if (daysLeft < 0) body = "WARNING: Your item '" + rec.getItem().getName() + "' is OVERDUE.";
                     EmailService.send(rec.getStudent().getEmail(), subject, body);
                     JOptionPane.showMessageDialog(this, "Reminder email sent.");
@@ -574,20 +573,44 @@ public class SmartBorrowSystem extends JFrame {
         stItemModel.setRowCount(0);
         for (Item i : DataStore.items) stItemModel.addRow(new Object[]{i.getItemId(), i.getName(), i.getCategory(), i.getCurrentQty() + " / " + i.getTotalQty()});
         stStatusModel.setRowCount(0);
-        for (BorrowRequest req : DataStore.requests) if (req.getStudent().equals(currentUser) && req.getStatus() != RequestStatus.COMPLETED) stStatusModel.addRow(new Object[]{req.getItem().getName(), "REQ: " + req.getStatus(), req.getType()});
-        for (BorrowRecord rec : DataStore.records) if (rec.getStudent().equals(currentUser)) stStatusModel.addRow(new Object[]{rec.getItem().getName(), rec.getReturnDate() == null ? "BORROWED" : "RETURNED", rec.getReturnDate() == null ? "Active" : "History"});
+        
+        // [UPDATED] Populate new columns for Student
+        for (BorrowRequest req : DataStore.requests) 
+            if (req.getStudent().equals(currentUser) && req.getStatus() != RequestStatus.COMPLETED) 
+                stStatusModel.addRow(new Object[]{req.getItem().getName(), "REQ: " + req.getStatus(), req.getType(), req.getRequestDate(), "-"});
+        
+        for (BorrowRecord rec : DataStore.records) 
+            if (rec.getStudent().equals(currentUser)) 
+                stStatusModel.addRow(new Object[]{
+                    rec.getItem().getName(), 
+                    rec.getReturnDate() == null ? "BORROWED" : "RETURNED", 
+                    rec.getReturnDate() == null ? "Active" : "History",
+                    rec.getBorrowDate(), // Added Borrow Date
+                    rec.getReturnDate() == null ? rec.getDueDate() : rec.getReturnDate() // Show DueDate or Actual Return Date
+                });
     }
 
     private void refreshAdminData() {
         if (adReqModel == null) return;
         adReqModel.setRowCount(0);
-        for (BorrowRequest r : DataStore.requests) if (r.getStatus() == RequestStatus.PENDING) adReqModel.addRow(new Object[]{r.getStudent().getId(), r.getStudent().getName(), r.getItem().getName(), r.getType(), "-", r.getStatus()});
+        for (BorrowRequest r : DataStore.requests) 
+            if (r.getStatus() == RequestStatus.PENDING) 
+                adReqModel.addRow(new Object[]{r.getStudent().getId(), r.getStudent().getName(), r.getItem().getName(), r.getType(), "-", r.getStatus()});
+        
         adRecModel.setRowCount(0);
         LocalDate today = LocalDate.now();
         for (BorrowRecord r : DataStore.records) if (r.getReturnDate() == null) {
             String status = today.isAfter(r.getDueDate()) ? "OVERDUE" : "BORROWED";
             int fine = FineCalculator.calculate(r.getDueDate(), today);
-            adRecModel.addRow(new Object[]{r.getStudent().getName(), r.getItem().getName(), r.getDueDate(), status, fine + " THB"});
+            // [UPDATED] Populate new columns for Admin (Borrow Date)
+            adRecModel.addRow(new Object[]{
+                r.getStudent().getName(), 
+                r.getItem().getName(), 
+                r.getBorrowDate(), // Added
+                r.getDueDate(), 
+                status, 
+                fine + " THB"
+            });
         }
     }
 
