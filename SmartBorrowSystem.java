@@ -258,9 +258,9 @@ class DataStore {
         items.add(new Item("I03", "Canon Camera", "AV", 3));
         items.add(new Item("I04", "Microphone Shure", "Audio", 10));
         
-        Student s1 = new Student("66001", "Good Student", "test_student@gmail.com", "081", "1234", CardType.STUDENT_CARD, 2002);
+        Student s1 = new Student("66001", "Good Student", "usrinusupus@gmail.com", "081", "1234", CardType.STUDENT_CARD, 2002);
         users.add(s1);
-        Student s2 = new Student("66999", "Late Student", "late_student@gmail.com", "089", "1234", CardType.STUDENT_CARD, 2001);
+        Student s2 = new Student("66999", "Late Student", "usrinusupus@gmail.com", "089", "1234", CardType.STUDENT_CARD, 2001);
         users.add(s2);
         Item i2 = items.get(1); 
         i2.decreaseQty(); 
